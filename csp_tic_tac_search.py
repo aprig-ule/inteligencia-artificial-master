@@ -1,6 +1,7 @@
+
 import sys
 sys.path.append("./aima-python")
-from search import Problem
+from csp import NaryCSP, Constraint, ac_solver
 
 def read_board():
 	"""Reads the board from line by line input until EOF or empty line."""
@@ -75,8 +76,15 @@ def is_complete(board):
 
 def print_board(board):
 	"""Prints the board."""
-	for row in board:
-		print(''.join(row))
+	if isinstance(board, dict):
+		n = int(len(board) ** 0.5)
+		# Try to infer n from keys
+		n = max(i for (i, j) in board.keys()) + 1
+		for i in range(n):
+			print(''.join(board[(i, j)] for j in range(n)))
+	else:
+		for row in board:
+			print(''.join(row))
 
 def is_goal(board):
 	"""Checks if the board is a goal state: valid, balanced, and each row/column has the 
@@ -99,69 +107,55 @@ def is_goal(board):
 	
 	return True
 
-class TicTacToeProblem(Problem):
-	def __init__(self, initial):
-		"""Initializes the problem with the given initial board state."""
-		super().__init__(initial)
-		self.n = len(initial)
+def make_row_eq(n):
+  return lambda *vals: sum(1 for v in vals[:n] if v == 'o') == sum(1 for v in vals[n:] if v == 'o')
+def make_col_eq(n):
+  return lambda *vals: sum(1 for v in vals[:n] if v == 'o') == sum(1 for v in vals[n:] if v == 'o')
 
-	def actions(self, state):
-		"""Returns all possible actions: placing 'x' or 'o' in any empty cell."""
-		actions = []
-		for i in range(self.n):
-			for j in range(self.n):
-				if state[i][j] == '_':
-					actions.append((i, j, 'x'))
-					actions.append((i, j, 'o'))
-		return actions
+def build_csp(board):
+	n = len(board)
+	domains = {}
+	for i in range(n):
+		for j in range(n):
+			if board[i][j] == '_':
+				domains[(i, j)] = {'x', 'o'}
+			else:
+				domains[(i, j)] = {board[i][j]}
 
-	def result(self, state, action):
-		i, j, symbol = action
-		new_state = []
-		for row in state:
-			new_row = []
-			for elem in row:
-				new_row.append(elem)
-			new_state.append(new_row)
-		new_state[i][j] = symbol
-		return new_state
-
-	def goal_test(self, state):
-		"""Checks if the given state is a goal state (complete and valid)."""
-		return is_complete(state) and is_goal(state)
-
-	def value(self, state):
-		"""Returns the value of the state (not used in this problem, always 0)."""
-		return 0
-
-	def constraints(self, state):
-		"""Checks if the state satisfies the board constraints (valid only)."""
-		return valid_board(state)
-
-def backtrack(problem):
-	"""Backtracking search to find a solution to the problem."""
-	def recursive(state):
-		#print_board(state)
-		#print("X------X")
-		if problem.goal_test(state):
-			return state
-		for action in problem.actions(state):
-			new_state = problem.result(state, action)
-			if problem.constraints(new_state):
-				result = recursive(new_state)
-				if result:
-					return result
-		return None
-	return recursive(problem.initial)
+	constraints = []
+	# No three consecutive in rows
+	def not_three(a, b, c):
+		return not (a == b == c)
+	for i in range(n):
+		for j in range(n - 2):
+			scope = ((i, j), (i, j+1), (i, j+2))
+			constraints.append(Constraint(scope, lambda a, b, c, f=not_three: f(a, b, c)))
+	# No three consecutive in columns
+	for j in range(n):
+		for i in range(n - 2):
+			scope = ((i, j), (i+1, j), (i+2, j))
+			constraints.append(Constraint(scope, lambda a, b, c, f=not_three: f(a, b, c)))
+	# Global constraint: all rows and all columns must have the same number of 'o' when fully assigned
+	def all_rows_cols_equal_o(*vals):
+		# vals: all board values row-wise
+		board_vals = [list(vals[i*n:(i+1)*n]) for i in range(n)]
+		# Check if any '_' remains
+		if any('_' in row for row in board_vals):
+			return True
+		row_counts = [row.count('o') for row in board_vals]
+		col_counts = [sum(1 for i in range(n) if board_vals[i][j] == 'o') for j in range(n)]
+		all_counts = row_counts + col_counts
+		return all(c == all_counts[0] for c in all_counts)
+	# Add a single global constraint over all variables
+	constraints.append(Constraint(tuple((i, j) for i in range(n) for j in range(n)), all_rows_cols_equal_o))
+	return NaryCSP(domains, constraints)
 
 def main():
 	board = read_board()
-	problem = TicTacToeProblem(board)
-	solution = backtrack(problem)
-
+	csp = build_csp(board)
+	solution = ac_solver(csp)
 	if solution:
-		for row in solution:
-			print(''.join(row))
+		print_board(solution)
 	else:
 		print("No hay solución.")
 
